@@ -54,6 +54,7 @@
   - [prepareSuspendedPaymentCancellation](#preparesuspendedpaymentcancellation)
   - [prepareSuspendedPaymentExecution](#preparesuspendedpaymentexecution)
   - [sign](#sign)
+  - [combine](#combine)
   - [submit](#submit)
   - [generateAddress](#generateaddress)
   - [computeLedgerHash](#computeledgerhash)
@@ -86,6 +87,9 @@ const {RippleAPI} = require('ripple-lib');
 const api = new RippleAPI({
   server: 'wss://s1.ripple.com' // Public rippled server hosted by Ripple, Inc.
 });
+api.on('error', (errorCode, errorMessage) => {
+  console.log(errorCode + ': ' + errorMessage);
+});
 api.connect().then(() => {
   /* insert code here */
 }).then(() => {
@@ -105,6 +109,10 @@ All the code snippets in this documentation assume that you have surrounded them
 If you omit the "catch" section, errors may not be visible.
 </aside>
 
+<aside class="notice">
+The "error" event is emitted whenever an error occurs that cannot be associated with a specific request. If the listener is not registered, an exception will be thrown whenever the event is emitted.
+</aside>
+
 ### Parameters
 
 The RippleAPI constructor optionally takes one argument, an object with the following options:
@@ -112,7 +120,10 @@ The RippleAPI constructor optionally takes one argument, an object with the foll
 Name | Type | Description
 ---- | ---- | -----------
 authorization | string | *Optional* Username and password for HTTP basic authentication to the rippled server in the format **username:password**.
+certificate | string | *Optional* A string containing the certificate key of the client in PEM format. (Can be an array of certificates).
 feeCushion | number | *Optional* Factor to multiply estimated fee by to provide a cushion in case the required fee rises during submission of a transaction. Defaults to `1.2`.
+key | string | *Optional* A string containing the private key of the client in PEM format. (Can be an array of keys).
+passphrase | string | *Optional* The passphrase for the private key of the client.
 proxy | uri string | *Optional* URI for HTTP/HTTPS proxy to use to connect to the rippled server.
 proxyAuthorization | string | *Optional* Username and password for HTTP basic authentication to the proxy in the format **username:password**.
 server | uri string | *Optional* URI for rippled websocket port to connect to. Must start with `wss://` or `ws://`.
@@ -259,7 +270,7 @@ Executing a transaction with `RippleAPI` requires the following four steps:
     * [prepareSuspendedPaymentCreation](#preparesuspendedpaymentcreation)
     * [prepareSuspendedPaymentCancellation](#preparesuspendedpaymentcancellation)
     * [prepareSuspendedPaymentExecution](#preparesuspendedpaymentexecution)
-2. [Sign](#sign) - Cryptographically sign the transaction locally and save the [transaction ID](#transaction-id). Signing is how the owner of an account authorizes a transaction to take place.
+2. [Sign](#sign) - Cryptographically sign the transaction locally and save the [transaction ID](#transaction-id). Signing is how the owner of an account authorizes a transaction to take place. For multisignature transactions, the `signedTransaction` fields returned by `sign` must be collected and passed to the [combine](#combine) method.
 3. [Submit](#submit) - Submit the transaction to the connected server.
 4. Verify - Verify that the transaction got validated by querying with [getTransaction](#gettransaction). This is necessary because transactions may fail even if they were successfully submitted.
 
@@ -277,9 +288,10 @@ Name | Type | Description
 ---- | ---- | -----------
 fee | [value](#value) | *Optional* An exact fee to pay for the transaction. See [Transaction Fees](#transaction-fees) for more information.
 maxFee | [value](#value) | *Optional* The maximum fee to pay for the transaction. See [Transaction Fees](#transaction-fees) for more information.
-maxLedgerVersion | integer | *Optional* The highest ledger version that the transaction can be included in.
-maxLedgerVersionOffset | integer | *Optional* Offset from current legder version to highest ledger version that the transaction can be included in.
+maxLedgerVersion | integer,null | *Optional* The highest ledger version that the transaction can be included in. If this option and `maxLedgerVersionOffset` are both omitted, the `maxLedgerVersion` option will default to 3 greater than the current validated ledger version (equivalent to `maxLedgerVersionOffset=3`). Use `null` to not set a maximum ledger version.
+maxLedgerVersionOffset | integer | *Optional* Offset from current validated legder version to highest ledger version that the transaction can be included in.
 sequence | [sequence](#account-sequence-number) | *Optional* The initiating account's sequence number for this transaction.
+signersCount | integer | *Optional* Number of signers that will be signing this transaction.
 
 We recommended that you specify a `maxLedgerVersion` so that you can quickly determine that a failed transaction will never succeeed in the future. It is impossible for a transaction to succeed after the network ledger version exceeds the transaction's `maxLedgerVersion`. If you omit `maxLedgerVersion`, the "prepare*" method automatically supplies a `maxLedgerVersion` equal to the current ledger plus 3, which it includes in the return value from the "prepare*" method.
 
@@ -470,6 +482,12 @@ passwordSpent | boolean | *Optional* Indicates that the account has used its fre
 regularKey | [address](#ripple-address),null | *Optional* The public key of a new keypair, to use as the regular key to this account, as a base-58-encoded string in the same format as an account address. Use `null` to remove the regular key.
 requireAuthorization | boolean | *Optional* If set, this account must individually approve other users in order for those users to hold this account’s issuances.
 requireDestinationTag | boolean | *Optional* Requires incoming payments to specify a destination tag.
+signers | object | *Optional* Settings that determine what sets of accounts can be used to sign a transaction on behalf of this account using multisigning.
+*signers.* threshold | integer | *Optional* A target number for the signer weights. A multi-signature from this list is valid only if the sum weights of the signatures provided is equal or greater than this value. To delete the signers setting, use the value `0`.
+*signers.* weights | array | *Optional* Weights of signatures for each signer.
+*signers.* weights[] | object | An association of an address and a weight.
+*signers.weights[].* address | [address](#ripple-address) | A Ripple account address
+*signers.weights[].* weight | integer | The weight that the signature of this account counts as towards the threshold.
 transferRate | number,null | *Optional*  The fee to charge when users transfer this account’s issuances, represented as billionths of a unit. Use `null` to set no fee.
 
 ### Example
@@ -673,10 +691,10 @@ pubkeyNode | string | Public key used to verify this node for internal communica
 serverState | string | A string indicating to what extent the server is participating in the network. See [Possible Server States](https://ripple.com/build/rippled-apis/#possible-server-states) for more details.
 validatedLedger | object | Information about the fully-validated ledger with the highest sequence number (the most recent).
 *validatedLedger.* age | integer | The time since the ledger was closed, in seconds.
-*validatedLedger.* baseFeeXRP | number | Base fee, in XRP. This may be represented in scientific notation such as 1e-05 for 0.00005.
+*validatedLedger.* baseFeeXRP | [value](#value) | Base fee, in XRP. This may be represented in scientific notation such as 1e-05 for 0.00005.
 *validatedLedger.* hash | string | Unique hash for the ledger, as an uppercase hexadecimal string.
-*validatedLedger.* reserveBaseXRP | integer | Minimum amount of XRP necessary for every account to keep in reserve.
-*validatedLedger.* reserveIncrementXRP | integer | Amount of XRP added to the account reserve for each object an account is responsible for in the ledger.
+*validatedLedger.* reserveBaseXRP | [value](#value) | Minimum amount of XRP necessary for every account to keep in reserve.
+*validatedLedger.* reserveIncrementXRP | [value](#value) | Amount of XRP added to the account reserve for each object an account is responsible for in the ledger.
 *validatedLedger.* ledgerVersion | integer | Identifying sequence number of this ledger version.
 validationQuorum | number | Minimum number of trusted validations required in order to validate a ledger version. Some circumstances may cause the server to require more validations.
 load | object | *Optional* *(Admin only)* Detailed information about the current load state of the server.
@@ -707,10 +725,10 @@ return api.getServerInfo().then(info => {/* ... */});
   "serverState": "full",
   "validatedLedger": {
     "age": 5,
-    "baseFeeXRP": 0.00001,
+    "baseFeeXRP": "0.00001",
     "hash": "4482DEE5362332F54A4036ED57EE1767C9F33CF7CE5A6670355C16CECE381D46",
-    "reserveBaseXRP": 20,
-    "reserveIncrementXRP": 5,
+    "reserveBaseXRP": "20",
+    "reserveIncrementXRP": "5",
     "ledgerVersion": 6595042
   },
   "validationQuorum": 3
@@ -730,7 +748,7 @@ This method has no parameters.
 
 ### Return Value
 
-This method returns a promise that resolves with a floating point value representing the estimated fee to submit a transaction, expressed in XRP.
+This method returns a promise that resolves with a string encoded floating point value representing the estimated fee to submit a transaction, expressed in XRP.
 
 ### Example
 
@@ -739,7 +757,7 @@ return api.getFee().then(fee => {/* ... */});
 ```
 
 ```json
-0.012
+"0.012"
 ```
 
 ## getLedgerVersion
@@ -2634,6 +2652,12 @@ passwordSpent | boolean | *Optional* Indicates that the account has used its fre
 regularKey | [address](#ripple-address),null | *Optional* The public key of a new keypair, to use as the regular key to this account, as a base-58-encoded string in the same format as an account address. Use `null` to remove the regular key.
 requireAuthorization | boolean | *Optional* If set, this account must individually approve other users in order for those users to hold this account’s issuances.
 requireDestinationTag | boolean | *Optional* Requires incoming payments to specify a destination tag.
+signers | object | *Optional* Settings that determine what sets of accounts can be used to sign a transaction on behalf of this account using multisigning.
+*signers.* threshold | integer | *Optional* A target number for the signer weights. A multi-signature from this list is valid only if the sum weights of the signatures provided is equal or greater than this value. To delete the signers setting, use the value `0`.
+*signers.* weights | array | *Optional* Weights of signatures for each signer.
+*signers.* weights[] | object | An association of an address and a weight.
+*signers.weights[].* address | [address](#ripple-address) | A Ripple account address
+*signers.weights[].* weight | integer | The weight that the signature of this account counts as towards the threshold.
 transferRate | number,null | *Optional*  The fee to charge when users transfer this account’s issuances, represented as billionths of a unit. Use `null` to set no fee.
 
 ### Example
@@ -2793,7 +2817,7 @@ txJSON | string | The prepared transaction in rippled JSON format.
 instructions | object | The instructions for how to execute the transaction after adding automatic defaults.
 *instructions.* fee | [value](#value) | An exact fee to pay for the transaction. See [Transaction Fees](#transaction-fees) for more information.
 *instructions.* sequence | [sequence](#account-sequence-number) | The initiating account's sequence number for this transaction.
-*instructions.* maxLedgerVersion | integer | *Optional* The highest ledger version that the transaction can be included in.
+*instructions.* maxLedgerVersion | integer,null | The highest ledger version that the transaction can be included in. Set to `null` if there is no maximum.
 
 ### Example
 
@@ -2862,7 +2886,7 @@ txJSON | string | The prepared transaction in rippled JSON format.
 instructions | object | The instructions for how to execute the transaction after adding automatic defaults.
 *instructions.* fee | [value](#value) | An exact fee to pay for the transaction. See [Transaction Fees](#transaction-fees) for more information.
 *instructions.* sequence | [sequence](#account-sequence-number) | The initiating account's sequence number for this transaction.
-*instructions.* maxLedgerVersion | integer | *Optional* The highest ledger version that the transaction can be included in.
+*instructions.* maxLedgerVersion | integer,null | The highest ledger version that the transaction can be included in. Set to `null` if there is no maximum.
 
 ### Example
 
@@ -2929,7 +2953,7 @@ txJSON | string | The prepared transaction in rippled JSON format.
 instructions | object | The instructions for how to execute the transaction after adding automatic defaults.
 *instructions.* fee | [value](#value) | An exact fee to pay for the transaction. See [Transaction Fees](#transaction-fees) for more information.
 *instructions.* sequence | [sequence](#account-sequence-number) | The initiating account's sequence number for this transaction.
-*instructions.* maxLedgerVersion | integer | *Optional* The highest ledger version that the transaction can be included in.
+*instructions.* maxLedgerVersion | integer,null | The highest ledger version that the transaction can be included in. Set to `null` if there is no maximum.
 
 ### Example
 
@@ -2994,7 +3018,7 @@ txJSON | string | The prepared transaction in rippled JSON format.
 instructions | object | The instructions for how to execute the transaction after adding automatic defaults.
 *instructions.* fee | [value](#value) | An exact fee to pay for the transaction. See [Transaction Fees](#transaction-fees) for more information.
 *instructions.* sequence | [sequence](#account-sequence-number) | The initiating account's sequence number for this transaction.
-*instructions.* maxLedgerVersion | integer | *Optional* The highest ledger version that the transaction can be included in.
+*instructions.* maxLedgerVersion | integer,null | The highest ledger version that the transaction can be included in. Set to `null` if there is no maximum.
 
 ### Example
 
@@ -3046,7 +3070,7 @@ txJSON | string | The prepared transaction in rippled JSON format.
 instructions | object | The instructions for how to execute the transaction after adding automatic defaults.
 *instructions.* fee | [value](#value) | An exact fee to pay for the transaction. See [Transaction Fees](#transaction-fees) for more information.
 *instructions.* sequence | [sequence](#account-sequence-number) | The initiating account's sequence number for this transaction.
-*instructions.* maxLedgerVersion | integer | *Optional* The highest ledger version that the transaction can be included in.
+*instructions.* maxLedgerVersion | integer,null | The highest ledger version that the transaction can be included in. Set to `null` if there is no maximum.
 
 ### Example
 
@@ -3111,7 +3135,7 @@ txJSON | string | The prepared transaction in rippled JSON format.
 instructions | object | The instructions for how to execute the transaction after adding automatic defaults.
 *instructions.* fee | [value](#value) | An exact fee to pay for the transaction. See [Transaction Fees](#transaction-fees) for more information.
 *instructions.* sequence | [sequence](#account-sequence-number) | The initiating account's sequence number for this transaction.
-*instructions.* maxLedgerVersion | integer | *Optional* The highest ledger version that the transaction can be included in.
+*instructions.* maxLedgerVersion | integer,null | The highest ledger version that the transaction can be included in. Set to `null` if there is no maximum.
 
 ### Example
 
@@ -3183,7 +3207,7 @@ txJSON | string | The prepared transaction in rippled JSON format.
 instructions | object | The instructions for how to execute the transaction after adding automatic defaults.
 *instructions.* fee | [value](#value) | An exact fee to pay for the transaction. See [Transaction Fees](#transaction-fees) for more information.
 *instructions.* sequence | [sequence](#account-sequence-number) | The initiating account's sequence number for this transaction.
-*instructions.* maxLedgerVersion | integer | *Optional* The highest ledger version that the transaction can be included in.
+*instructions.* maxLedgerVersion | integer,null | The highest ledger version that the transaction can be included in. Set to `null` if there is no maximum.
 
 ### Example
 
@@ -3240,7 +3264,7 @@ txJSON | string | The prepared transaction in rippled JSON format.
 instructions | object | The instructions for how to execute the transaction after adding automatic defaults.
 *instructions.* fee | [value](#value) | An exact fee to pay for the transaction. See [Transaction Fees](#transaction-fees) for more information.
 *instructions.* sequence | [sequence](#account-sequence-number) | The initiating account's sequence number for this transaction.
-*instructions.* maxLedgerVersion | integer | *Optional* The highest ledger version that the transaction can be included in.
+*instructions.* maxLedgerVersion | integer,null | The highest ledger version that the transaction can be included in. Set to `null` if there is no maximum.
 
 ### Example
 
@@ -3272,7 +3296,7 @@ return api.prepareSuspendedPaymentExecution(address, suspendedPaymentExecution).
 
 ## sign
 
-`sign(txJSON: string, secret: string): {signedTransaction: string, id: string}`
+`sign(txJSON: string, secret: string, options: Object): {signedTransaction: string, id: string}`
 
 Sign a prepared transaction. The signed transaction must subsequently be [submitted](#submit).
 
@@ -3282,6 +3306,8 @@ Name | Type | Description
 ---- | ---- | -----------
 txJSON | string | Transaction represented as a JSON string in rippled format.
 secret | secret string | The secret of the account that is initiating the transaction.
+options | object | *Optional* Options that control the type of signature that will be generated.
+*options.* signAs | [address](#ripple-address) | *Optional* The account that the signature should count for in multisigning.
 
 ### Return Value
 
@@ -3305,6 +3331,44 @@ return api.sign(txJSON, secret);
 {
   "signedTransaction": "12000322800000002400000017201B0086955368400000000000000C732102F89EAEC7667B30F33D0687BBA86C3FE2A08CCA40A9186C5BDE2DAA6FA97A37D874473045022100BDE09A1F6670403F341C21A77CF35BA47E45CDE974096E1AA5FC39811D8269E702203D60291B9A27F1DCABA9CF5DED307B4F23223E0B6F156991DB601DFB9C41CE1C770A726970706C652E636F6D81145E7B112523F68D2F5E879DB4EAC51C6698A69304",
   "id": "02ACE87F1996E3A23690A5BB7F1774BF71CCBA68F79805831B42ABAD5913D6F4"
+}
+```
+
+
+## combine
+
+`combine(signedTransactions: Array<string>): {signedTransaction: string, id: string}`
+
+Combines signed transactions from multiple accounts for a multisignature transaction. The signed transaction must subsequently be [submitted](#submit).
+
+### Parameters
+
+Name | Type | Description
+---- | ---- | -----------
+signedTransactions | array\<string\> | An array of signed transactions (from the output of [sign](#sign)) to combine.
+
+### Return Value
+
+This method returns an object with the following structure:
+
+Name | Type | Description
+---- | ---- | -----------
+signedTransaction | string | The signed transaction represented as an uppercase hexadecimal string.
+id | [id](#transaction-id) | The [Transaction ID](#transaction-id) of the signed transaction.
+
+### Example
+
+```javascript
+const signedTransactions = [ "12000322800000002400000004201B000000116840000000000F42407300770B6578616D706C652E636F6D811407C532442A675C881BA1235354D4AB9D023243A6F3E0107321026C784C1987F83BACBF02CD3E484AFC84ADE5CA6B36ED4DCA06D5BA233B9D382774473045022100E484F54FF909469FA2033E22EFF3DF8EDFE62217062680BB2F3EDF2F185074FE0220350DB29001C710F0450DAF466C5D819DC6D6A3340602DE9B6CB7DA8E17C90F798114FE9337B0574213FA5BCC0A319DBB4A7AC0CCA894E1F1",
+  "12000322800000002400000004201B000000116840000000000F42407300770B6578616D706C652E636F6D811407C532442A675C881BA1235354D4AB9D023243A6F3E01073210287AAAB8FBE8C4C4A47F6F1228C6E5123A7ED844BFE88A9B22C2F7CC34279EEAA74473045022100B09DDF23144595B5A9523B20E605E138DC6549F5CA7B5984D7C32B0E3469DF6B022018845CA6C203D4B6288C87DDA439134C83E7ADF8358BD41A8A9141A9B631419F8114517D9B9609229E0CDFE2428B586738C5B2E84D45E1F1" ];
+return api.combine(signedTransactions);
+```
+
+
+```json
+{
+  "signedTransaction": "12000322800000002400000004201B000000116840000000000F42407300770B6578616D706C652E636F6D811407C532442A675C881BA1235354D4AB9D023243A6F3E01073210287AAAB8FBE8C4C4A47F6F1228C6E5123A7ED844BFE88A9B22C2F7CC34279EEAA74473045022100B09DDF23144595B5A9523B20E605E138DC6549F5CA7B5984D7C32B0E3469DF6B022018845CA6C203D4B6288C87DDA439134C83E7ADF8358BD41A8A9141A9B631419F8114517D9B9609229E0CDFE2428B586738C5B2E84D45E1E0107321026C784C1987F83BACBF02CD3E484AFC84ADE5CA6B36ED4DCA06D5BA233B9D382774473045022100E484F54FF909469FA2033E22EFF3DF8EDFE62217062680BB2F3EDF2F185074FE0220350DB29001C710F0450DAF466C5D819DC6D6A3340602DE9B6CB7DA8E17C90F798114FE9337B0574213FA5BCC0A319DBB4A7AC0CCA894E1F1",
+  "id": "8A3BFD2214B4C8271ED62648FCE9ADE4EE82EF01827CF7D1F7ED497549A368CC"
 }
 ```
 
@@ -3355,7 +3419,11 @@ Generate a new Ripple address and corresponding secret.
 
 ### Parameters
 
-This method has no parameters.
+Name | Type | Description
+---- | ---- | -----------
+options | object | *Optional* Options to control how the address and secret are generated.
+*options.* algorithm | string | *Optional* The digital signature algorithm to generate an address for. Can be `ecdsa-secp256k1` (default) or `ed25519`.
+*options.* entropy | array\<integer\> | *Optional* The entropy to use to generate the seed.
 
 ### Return Value
 
@@ -3369,8 +3437,7 @@ secret | secret string | The secret corresponding to the `address`.
 ### Example
 
 ```javascript
-return api.generateAddress()
-  .then(result => {/* ... */});
+return api.generateAddress();
 ```
 
 
@@ -3451,7 +3518,7 @@ Name | Type | Description
 baseFeeXRP | [value](#value) | Base fee, in XRP.
 ledgerHash | string | Unique hash of the ledger that was closed, as hex.
 ledgerTimestamp | date-time string | The time at which this ledger closed.
-reserveBaseXRP | [value](#value) | The minimum reserve, in drops of XRP, that is required for an account.
+reserveBaseXRP | [value](#value) | The minimum reserve, in XRP, that is required for an account.
 reserveIncrementXRP | [value](#value) | The increase in account reserve that is added for each item the account owns, such as offers or trust lines.
 transactionCount | integer | Number of new transactions included in this ledger.
 ledgerVersion | integer | Ledger version of the ledger that closed.
@@ -3482,16 +3549,26 @@ api.on('ledger', ledger => {
 
 ## error
 
-This event is emitted when there is an error on the connection to the server.
+This event is emitted when there is an error on the connection to the server that cannot be associated to a specific request.
 
 ### Return Value
 
-The first parameter is a string indicating the error type, which may be `badMessage` (meaning that rippled returned a malformed message), or one of the [rippled Universal Errors](https://ripple.com/build/rippled-apis/#universal-errors). The second parameter is a message explaining the error, or the message that caused the error in the case of `badMessage`.
+The first parameter is a string indicating the error type:
+* `badMessage` - rippled returned a malformed message
+* `websocket` - the websocket library emitted an error
+* one of the error codes found in the [rippled Universal Errors](https://ripple.com/build/rippled-apis/#universal-errors).
+
+The second parameter is a message explaining the error.
+
+The third parameter is:
+* the message that caused the error for `badMessage`
+* the error object emitted for `websocket`
+* the parsed response for rippled errors
 
 ### Example
 
 ```javascript
-api.on('error', (errorCode, errorMessage) => {
+api.on('error', (errorCode, errorMessage, data) => {
   console.log(errorCode + ': ' + errorMessage);
 });
 ```

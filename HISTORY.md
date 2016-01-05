@@ -1,3 +1,30 @@
+##0.16.4
+**Changes**
++ [Update ws to 1.0.1](https://github.com/ripple/ripple-lib/pull/682)
+
+##0.16.2
+**Changes**
++ [Bump ripple-binary-codec dependency version to 0.1.1 to fix issue with computeLedgerHash for transactions with DeliverMin]
+
+##0.16.1
+**Changes**
++ [FIX: Use assert not assert-diff](https://github.com/ripple/ripple-lib/commit/f6ebe325193e7208c5ee8d8e84a7504714f0009e)
+
+##0.16.0
+**Breaking Changes**
++ [Fix types of XRP values in getServerInfo response](https://github.com/ripple/ripple-lib/commit/99d08065e4bda3dda6ae1f183adbd11abc70a9b7)
++ [Change error event format and fix crash due to error event on webscocket](https://github.com/ripple/ripple-lib/commit/9cd72595f0efc062d77b9d625695d6030c524cc6)
+
+**Changes**
++ [Fix generateAddress docs and add error event listener to boilerplate](https://github.com/ripple/ripple-lib/commit/809d981987a2890fac3a73a40a05c598b9040334)
++ [Allow setting maxLedgerVersion to null to specify no maximum](https://github.com/ripple/ripple-lib/commit/82613e7e8b360d1ae1552eab4559ab4763c06d7e)
++ [Add support for client certificates](https://github.com/ripple/ripple-lib/commit/5f5e48e4140345d166b8c1a3ee0847b0d9e2d893)
++ [getFee returns a string not float](https://github.com/ripple/ripple-lib/commit/7bf2da6014c87e164542e69356efeaabb575a157)
++ [Fix parsing of quality for getTrustlines](https://github.com/ripple/ripple-lib/commit/86ff315ef2a39dfdc2ce97e0e1c4aa73f04e363b)
++ [Fix DeliverMin value when specifying minAmount](Fix DeliverMin value when specifying minAmount)
++ [http server example](https://github.com/ripple/ripple-lib/commit/76866ab901ea46a2dd73181605e0f7f4220043d4)
+
+
 ##0.15.2
 **Changes**
 + [Fix support for proxy credentials in proxy URL and fix error when there are more than 10 outstanding requests](https://github.com/ripple/ripple-lib/commit/0990ad4a6f1d59ca9d2cb859b4e2d71693f3fc4b)

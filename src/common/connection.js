@@ -1,4 +1,5 @@
 'use strict';
+const _ = require('lodash');
 const {EventEmitter} = require('events');
 const WebSocket = require('ws');
 const parseURL = require('url').parse;
@@ -26,12 +27,26 @@ class Connection extends EventEmitter {
     this._proxyAuthorization = options.proxyAuthorization;
     this._authorization = options.authorization;
     this._trustedCertificates = options.trustedCertificates;
+    this._key = options.key;
+    this._passphrase = options.passphrase;
+    this._certificate = options.certificate;
     this._timeout = options.timeout || (20 * 1000);
     this._isReady = false;
     this._ws = null;
     this._ledgerVersion = null;
     this._availableLedgerVersions = new RangeSet();
     this._nextRequestID = 1;
+  }
+
+  _updateLedgerVersions(data) {
+    this._ledgerVersion = Number(data.ledger_index);
+    if (data.validated_ledgers) {
+      this._availableLedgerVersions.reset();
+      this._availableLedgerVersions.parseAndAddRanges(
+        data.validated_ledgers);
+    } else {
+      this._availableLedgerVersions.addValue(this._ledgerVersion);
+    }
   }
 
   // return value is array of arguments to Connection.emit
@@ -44,14 +59,11 @@ class Connection extends EventEmitter {
       return [data.id.toString(), data];
     } else if (isStreamMessageType(data.type)) {
       if (data.type === 'ledgerClosed') {
-        this._ledgerVersion = Number(data.ledger_index);
-        this._availableLedgerVersions.reset();
-        this._availableLedgerVersions.parseAndAddRanges(
-          data.validated_ledgers);
+        this._updateLedgerVersions(data);
       }
       return [data.type, data];
     } else if (data.type === undefined && data.error) {
-      return ['error', data.error, data.error_message];  // e.g. slowDown
+      return ['error', data.error, data.error_message, data];  // e.g. slowDown
     }
     throw new ResponseFormatError('unrecognized message type: ' + data.type);
   }
@@ -64,7 +76,7 @@ class Connection extends EventEmitter {
     try {
       parameters = this._parseMessage(message);
     } catch (error) {
-      this.emit('error', 'badMessage', message);
+      this.emit('error', 'badMessage', error.message, message);
       return;
     }
     // we don't want this inside the try/catch or exceptions in listener
@@ -95,29 +107,28 @@ class Connection extends EventEmitter {
       command: 'subscribe',
       streams: ['ledger']
     };
-    return this.request(request).then(response => {
-      this._ledgerVersion = Number(response.ledger_index);
-      this._availableLedgerVersions.parseAndAddRanges(
-        response.validated_ledgers);
+    return this.request(request).then(data => {
+      this._updateLedgerVersions(data);
       this._isReady = true;
       this.emit('connected');
     });
   }
 
-  _createWebSocket(url, proxyURL, proxyAuthorization, authorization,
-      trustedCertificates) {
+  _createWebSocket() {
     const options = {};
-    if (proxyURL !== undefined) {
-      const parsedURL = parseURL(url);
-      const proxyOptions = parseURL(proxyURL);
-      proxyOptions.secureEndpoint = (parsedURL.protocol === 'wss:');
-      proxyOptions.secureProxy = (proxyOptions.protocol === 'https:');
-      if (proxyAuthorization !== undefined) {
-        proxyOptions.auth = proxyAuthorization;
-      }
-      if (trustedCertificates !== undefined) {
-        proxyOptions.ca = trustedCertificates;
-      }
+    if (this._proxyURL !== undefined) {
+      const parsedURL = parseURL(this._url);
+      const parsedProxyURL = parseURL(this._proxyURL);
+      const proxyOverrides = _.omit({
+        secureEndpoint: (parsedURL.protocol === 'wss:'),
+        secureProxy: (parsedProxyURL.protocol === 'https:'),
+        auth: this._proxyAuthorization,
+        ca: this._trustedCertificates,
+        key: this._key,
+        passphrase: this._passphrase,
+        cert: this._certificate
+      }, _.isUndefined);
+      const proxyOptions = _.assign({}, parsedProxyURL, proxyOverrides);
       let HttpsProxyAgent;
       try {
         HttpsProxyAgent = require('https-proxy-agent');
@@ -126,11 +137,18 @@ class Connection extends EventEmitter {
       }
       options.agent = new HttpsProxyAgent(proxyOptions);
     }
-    if (authorization !== undefined) {
-      const base64 = new Buffer(authorization).toString('base64');
+    if (this._authorization !== undefined) {
+      const base64 = new Buffer(this._authorization).toString('base64');
       options.headers = {Authorization: `Basic ${base64}`};
     }
-    const websocket = new WebSocket(url, options);
+    const optionsOverrides = _.omit({
+      ca: this._trustedCertificates,
+      key: this._key,
+      passphrase: this._passphrase,
+      cert: this._certificate
+    }, _.isUndefined);
+    const websocketOptions = _.assign({}, options, optionsOverrides);
+    const websocket = new WebSocket(this._url, websocketOptions);
     // we will have a listener for each outstanding request,
     // so we have to raise the limit (the default is 10)
     websocket.setMaxListeners(Infinity);
@@ -148,9 +166,13 @@ class Connection extends EventEmitter {
       } else if (this._state === WebSocket.CONNECTING) {
         this._ws.once('open', resolve);
       } else {
-        this._ws = this._createWebSocket(this._url, this._proxyURL,
-          this._proxyAuthorization, this._authorization,
-          this._trustedCertificates);
+        this._ws = this._createWebSocket();
+        // when an error causes the connection to close, the close event
+        // should still be emitted; the "ws" documentation says: "The close
+        // event is also emitted when then underlying net.Socket closes the
+        // connection (end or close)."
+        this._ws.on('error', error =>
+          this.emit('error', 'websocket', error.messsage, error));
         this._ws.on('message', this._onMessage.bind(this));
         this._onUnexpectedCloseBound = this._onUnexpectedClose.bind(this);
         this._ws.once('close', this._onUnexpectedCloseBound);

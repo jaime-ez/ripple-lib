@@ -10,7 +10,8 @@ function formatPrepareResponse(txJSON: Object): Object {
   const instructions = {
     fee: common.dropsToXrp(txJSON.Fee),
     sequence: txJSON.Sequence,
-    maxLedgerVersion: txJSON.LastLedgerSequence
+    maxLedgerVersion: txJSON.LastLedgerSequence === undefined ?
+      null : txJSON.LastLedgerSequence
   };
   return {
     txJSON: JSON.stringify(txJSON),
@@ -26,6 +27,10 @@ function setCanonicalFlag(txJSON) {
   txJSON.Flags = txJSON.Flags >>> 0;
 }
 
+function scaleValue(value, multiplier) {
+  return (new BigNumber(value)).times(multiplier).toString();
+}
+
 function prepareTransaction(txJSON: Object, api: Object,
     instructions: Instructions
 ): Promise<Prepare> {
@@ -36,7 +41,9 @@ function prepareTransaction(txJSON: Object, api: Object,
 
   function prepareMaxLedgerVersion(): Promise<Object> {
     if (instructions.maxLedgerVersion !== undefined) {
-      txJSON.LastLedgerSequence = instructions.maxLedgerVersion;
+      if (instructions.maxLedgerVersion !== null) {
+        txJSON.LastLedgerSequence = instructions.maxLedgerVersion;
+      }
       return Promise.resolve(txJSON);
     }
     const offset = instructions.maxLedgerVersionOffset !== undefined ?
@@ -48,8 +55,10 @@ function prepareTransaction(txJSON: Object, api: Object,
   }
 
   function prepareFee(): Promise<Object> {
+    const multiplier = instructions.signersCount === undefined ? 1 :
+      instructions.signersCount + 1;
     if (instructions.fee !== undefined) {
-      txJSON.Fee = common.xrpToDrops(instructions.fee);
+      txJSON.Fee = scaleValue(common.xrpToDrops(instructions.fee), multiplier);
       return Promise.resolve(txJSON);
     }
     const cushion = api._feeCushion;
@@ -57,9 +66,10 @@ function prepareTransaction(txJSON: Object, api: Object,
       const feeDrops = common.xrpToDrops(fee);
       if (instructions.maxFee !== undefined) {
         const maxFeeDrops = common.xrpToDrops(instructions.maxFee);
-        txJSON.Fee = BigNumber.min(feeDrops, maxFeeDrops).toString();
+        const normalFee = BigNumber.min(feeDrops, maxFeeDrops).toString();
+        txJSON.Fee = scaleValue(normalFee, multiplier);
       } else {
-        txJSON.Fee = feeDrops;
+        txJSON.Fee = scaleValue(feeDrops, multiplier);
       }
       return txJSON;
     });

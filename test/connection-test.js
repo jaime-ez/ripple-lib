@@ -7,6 +7,7 @@ const assert = require('assert-diff');
 const setupAPI = require('./setup-api');
 const RippleAPI = require('ripple-api').RippleAPI;
 const utils = RippleAPI._PRIVATE.ledgerUtils;
+const ledgerClose = require('./fixtures/rippled/ledger-close.json');
 
 
 function unused() {
@@ -227,8 +228,9 @@ describe('Connection', function() {
   });
 
   it('invalid message id', function(done) {
-    this.api.on('error', (type, message) => {
-      assert.strictEqual(type, 'badMessage');
+    this.api.on('error', (errorCode, errorMessage, message) => {
+      assert.strictEqual(errorCode, 'badMessage');
+      assert.strictEqual(errorMessage, 'valid id not found in response');
       assert.strictEqual(message,
         '{"type":"response","id":"must be integer"}');
       done();
@@ -239,9 +241,10 @@ describe('Connection', function() {
   });
 
   it('propagate error message', function(done) {
-    this.api.on('error', (type, message) => {
-      assert.strictEqual(type, 'slowDown');
-      assert.strictEqual(message, 'slow down');
+    this.api.on('error', (errorCode, errorMessage, data) => {
+      assert.strictEqual(errorCode, 'slowDown');
+      assert.strictEqual(errorMessage, 'slow down');
+      assert.deepEqual(data, {error: 'slowDown', error_message: 'slow down'});
       done();
     });
     this.api.connection._onMessage(JSON.stringify({
@@ -250,12 +253,22 @@ describe('Connection', function() {
   });
 
   it('unrecognized message type', function(done) {
-    this.api.on('error', (type, message) => {
-      assert.strictEqual(type, 'badMessage');
+    this.api.on('error', (errorCode, errorMessage, message) => {
+      assert.strictEqual(errorCode, 'badMessage');
+      assert.strictEqual(errorMessage, 'unrecognized message type: unknown');
       assert.strictEqual(message, '{"type":"unknown"}');
       done();
     });
 
     this.api.connection._onMessage(JSON.stringify({type: 'unknown'}));
+  });
+
+  it('ledger close without validated_ledgers', function(done) {
+    const message = _.omit(ledgerClose, 'validated_ledgers');
+    this.api.on('ledger', function(ledger) {
+      assert.strictEqual(ledger.ledgerVersion, 8819951);
+      done();
+    });
+    this.api.connection._ws.emit('message', JSON.stringify(message));
   });
 });

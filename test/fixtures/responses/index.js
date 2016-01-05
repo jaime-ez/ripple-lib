@@ -71,8 +71,8 @@ module.exports = {
   },
   preparePayment: {
     normal: require('./prepare-payment.json'),
-    minAmountXRP: require('./prepare-payment-min-amont-xrp.json'),
-    minAmountXRPXRP: require('./prepare-payment-min-amont-xrp-xrp.json'),
+    minAmountXRP: require('./prepare-payment-min-amount-xrp.json'),
+    minAmountXRPXRP: require('./prepare-payment-min-amount-xrp-xrp.json'),
     allOptions: require('./prepare-payment-all-options.json'),
     noCounterparty: require('./prepare-payment-no-counterparty.json'),
     minAmount: require('./prepare-payment-min-amount.json')
@@ -81,12 +81,15 @@ module.exports = {
     regularKey: require('./prepare-settings-regular-key.json'),
     removeRegularKey: require('./prepare-settings-remove-regular-key.json'),
     flags: require('./prepare-settings.json'),
+    flagsMultisign: require('./prepare-settings-multisign.json'),
     flagSet: require('./prepare-settings-flag-set.json'),
     flagClear: require('./prepare-settings-flag-clear.json'),
     setTransferRate: require('./prepare-settings-set-transfer-rate.json'),
     fieldClear: require('./prepare-settings-field-clear.json'),
     noInstructions: require('./prepare-settings-no-instructions.json'),
-    signed: require('./prepare-settings-signed.json')
+    signed: require('./prepare-settings-signed.json'),
+    noMaxLedgerVersion: require('./prepare-settings-no-maxledgerversion.json'),
+    signers: require('./prepare-settings-signers.json')
   },
   prepareSuspendedPaymentCreation: {
     normal: require('./prepare-suspended-payment-creation'),
@@ -107,7 +110,11 @@ module.exports = {
   },
   sign: {
     normal: require('./sign.json'),
-    suspended: require('./sign-suspended.json')
+    suspended: require('./sign-suspended.json'),
+    signAs: require('./sign-as')
+  },
+  combine: {
+    single: require('./combine.json')
   },
   submit: require('./submit.json'),
   ledgerEvent: require('./ledger-event.json')
